@@ -1,9 +1,9 @@
 #include "BufferLL.h"
 #include <stdio.h> 
 #include <stdlib.h> 
+#include <string.h>
 
 LinkedBuffer* createBuffer(int max){
-    printf("creating buffer\n");
     LinkedBuffer* b = (LinkedBuffer *) malloc(sizeof(LinkedBuffer));
     b->head = NULL;
     b->tail = NULL;
@@ -14,6 +14,7 @@ LinkedBuffer* createBuffer(int max){
     pthread_cond_init(&b->more, NULL);
     pthread_cond_init(&b->less, NULL);
 
+    return b;
 }
 
 Node* createNode(char* data){
@@ -34,8 +35,11 @@ int isFull(LinkedBuffer* b){
 }
 
 void addData(LinkedBuffer* b, char* data){
+    //create new string (to deep copy).
+    char* copy = malloc(strlen(data) + 1);
+    strcpy(copy, data);
     if (!isFull(b)){
-        Node* node = createNode(data);
+        Node* node = createNode(copy);
         if (isEmpty(b)){
             //head and tail are the same
             b->head = node;
@@ -55,10 +59,11 @@ void printLinkedBuffer(LinkedBuffer *b){
     Node* t = b->head;
     int counter = 0;
     while (t != NULL){
-        printf("Node %d: %s\n", counter, t->str);
+        printf("[%s] -> ", t->str);
         counter++;
         t = t->next;
     }
+    printf("\n");
 }
 
 void revPrintLinkedBuffer(LinkedBuffer * b ){

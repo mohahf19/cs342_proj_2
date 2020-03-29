@@ -30,109 +30,9 @@ typedef struct reducerPassingData{
   LinkedBuffer** buffers;
 } reducerPassingData;
 
-void * mapperRunner (void *  a)
-{
-  
-  struct mapperPassingData *data = a;
-  int* index = data->index;
-  LinkedBuffer* b = data->b;
-  //printf ("thread started: %d\n",index); 
+void* reducerRunner(void* a);
 
-  //open the indexth split file
-  char buf[255];
-  snprintf(buf, 255, "split%d", index);
-  FILE *split = fopen(buf, "r");
-
-  char*line = NULL;
-    size_t len = 0;
-    ssize_t read ;
-
-    //printf("beginning to read..\n");
-    int row, col, val;
-    while ((read = getline(&line, &len, split) != -1)) {
-        
-        sscanf(line, "%d%d%d\n", &row, &col, &val);
-        int res = (val * vector[col-1]); //to row
-
-        snprintf(buf, 255, "%d %d", row, res);
-        //TODO write buf to b after syncronizing it
-
-        //crit section
-        pthread_mutex_lock(&b->mutex);
-        
-        //while buffer is full, wait
-        while (isFull(b)){
-            pthread_cond_wait(&b->less, &b->mutex);
-        }
-
-        //mutex unlocked and there is space in the buffer
-        addData(b, buf);
-
-        //signal that we have one more element
-        pthread_cond_signal(&b->more);
-        
-        //unlock the mutex
-        pthread_mutex_unlock(&b->mutex);
-    }
-
-    //reading here is done! Now set done to 1 to signify that the 
-    //mapper's loading process has finished
-    pthread_mutex_lock(&b->mutex);
-    b->done = 1;
-    pthread_mutex_lock(&b->mutex);
-    
-
-    pthread_exit(0);  //thread done byebye
-}
-
-void* reducerRunner(void* a){
-    printf("reducer thread started boi\n");
-
-    struct reducerPassingData *data = a;
-    int files = data->files;
-    LinkedBuffer** buffers = data->buffers;
-    int* done = initEmptyArr(files);
-    int countDone = 0;
-    while(countDone < files){ // for each buffer
-        for(int i = 0; i < files; i++){ 
-            //if this buffer is done, skip it
-            if (done[i])
-                continue; 
-            //lock it
-            LinkedBuffer* b = buffers[i];
-            //lock the mutex
-            pthread_mutex_lock(&b->mutex);
-            
-            //if it is empty, mark it as empty and skip in the future
-            if (b->done && isEmpty(b)){
-                done[i] = 1;
-            } else { //buffer is not done! 
-                //while it is empty, wait until there is a new item
-                while (isEmpty(b)){
-                    pthread_cond_wait(&b->more, &b->mutex);
-                }
-
-                //now we have a new element in the buffer, mutex is unlocked
-                char* data = popData(b);
-
-                //now signal that there is less # of elements in buffer
-                pthread_cond_signal(&b->less);
-
-                //now unlock the mutex
-                pthread_mutex_unlock(&b->mutex);
-
-                //TODO process the data
-                printf("Reducer read: %s", data);
-
-            }
-            
-        }
-    }
-    
-
-    free(done);
-    pthread_exit(0);
-}
+void* mapperRunner(void* a);
 
 int microsec(const struct timeval *start, const struct timeval *end) {
     long sec = end->tv_sec - start->tv_sec; //to avoid overflow
@@ -159,6 +59,16 @@ void combineAndWriteResults(int created, char *resultfile, char* vec);
 void deleteMiddleFiles(int created);
 
 void writeToPipe(int* res, int n,int i);
+
+void printarr(int *arr, int k) {
+    printf("[");
+    for(int i = 0; i < k -1; i++){
+        printf("%d, ", arr[i]);
+    }
+    printf("%d]\n", arr[k-1]);
+}
+
+void saveResult(char*);
 
 int main(int argc, char *argv[]) {
 
@@ -190,12 +100,15 @@ int main(int argc, char *argv[]) {
 
         // read the vector file into the global variable
         vector = readVector(vectorfile, &size);
+        //printarr(vector, size);
         result = initEmptyArr(size);
-        printf("vector is read and is of size %d\n", size);
+        //printf("vector is read and is of size %d\n", size);
         
         createAndProcessSplits(filesCreated, resultfile, B);
 
         //combineAndWriteResults(filesCreated, resultfile, vectorfile);
+
+        saveResult(resultfile);
 
         deleteMiddleFiles(filesCreated);
 
@@ -260,27 +173,22 @@ void createAndProcessSplits(int files, char* result, int maxBuffer) {
     pthread_t * mappers = malloc(sizeof(pthread_t)* files);
     pthread_attr_t attr;
     pthread_t reducer;
-    int** partialResults = malloc(sizeof(int*)*files);
+    //int** partialResults = malloc(sizeof(int*)*files);
     struct mapperPassingData* data = malloc(sizeof(struct mapperPassingData)*files);
-    pid_t n;
-    int vectorRow = size;
-
+    
     // BUFFERS
     // THEY ALREADY HAVE THEIR OWN MUTEXES INSIDE, JUST INITIALZIE THEM.
     LinkedBuffer** buffers = malloc(sizeof(LinkedBuffer * )* files);
 
-    //printf("i need this many veccies.. %d\n", vectorRow);
-    int* resultArray =  initEmptyArr(vectorRow);
-    //printf("res is ");
 
     for(int i = 0; i < files; i++){
+        printf("created mapper %d\n", i);
         data[i].index = i;
         buffers[i] = createBuffer(maxBuffer);
         data[i].b = buffers[i];
         pthread_attr_init(&attr);
         pthread_create(&(mappers[i]), &attr, mapperRunner, &data[i]);
     }
-
     reducerPassingData d;
     d.files = files;
     d.buffers = buffers;
@@ -290,8 +198,8 @@ void createAndProcessSplits(int files, char* result, int maxBuffer) {
     pthread_join(reducer, NULL);
 
     //TODO free the data up (structs for example)
-    printResult(resultArray, vectorRow, -1, result);
-    //printf("Done writing! lybye\n");
+    
+
     
 }
 
@@ -365,7 +273,7 @@ void writeToPipe(int* res, int n,int i){
 
 void printResult(int *arr, int n, int i, char* filename) {
     //printf("writing to a file %s\n", filename);
-    char* buf;
+    char* buf = "";
     if ( i >=0 ){ 
         snprintf(buf, 255, "%s%d",filename,  i);
     } else{ //i < 0 is true for the end result file
@@ -416,7 +324,6 @@ int *readVector(char *vectorfile, int *numLines) {
 
     while ((read = getline(&line, &len, fp) != -1)) {
         int row, val;
-        //printf("Read: %s\n", line);
         sscanf(line,"%d%d\n", &row, &val);
         arr[row-1] = val;
         linesread++;
@@ -428,7 +335,7 @@ int *readVector(char *vectorfile, int *numLines) {
 void createSplits(char *matrixfile, int s, int k, int l , int* filesCreated) {
     FILE *fp = fopen(matrixfile, "r");
     if (fp == NULL){
-        ////printf("Couldn't open %s\n", matrixfile);
+        printf("Couldn't open %s\n", matrixfile);
     }
     char*line = NULL;
     size_t len = 0;
@@ -495,3 +402,129 @@ int countLines(char *matrixfile) {
     return count;
 }
 
+//thread functions
+void * mapperRunner (void *  a)
+{
+  
+  struct mapperPassingData *data = a;
+  int index = data->index;
+  LinkedBuffer* b = data->b;
+  
+  printf ("mapper started: %d\n",index); 
+
+  //open the indexth split file
+  char buf[255];
+  snprintf(buf, 255, "split%d", index);
+  FILE *split = fopen(buf, "r");
+
+  char*line = NULL;
+    size_t len = 0;
+    ssize_t read ;
+
+    //printf("beginning to read..\n");
+    int row, col, val;
+    while ((read = getline(&line, &len, split) != -1)) {
+        //printf("mapper %d read %s", index, line);
+        sscanf(line, "%d%d%d\n", &row, &col, &val);
+        
+        int res = (val * vector[col-1]); //to row
+        
+        snprintf(buf, 255, "%d %d", row, res);
+        //TODO write buf to b after syncronizing it
+
+        //crit section
+        pthread_mutex_lock(&b->mutex);
+        
+        //while buffer is full, wait
+        while (isFull(b)){
+            pthread_cond_wait(&b->less, &b->mutex);
+        }
+
+        //mutex unlocked and there is space in the buffer
+        addData(b, buf);
+        //signal that we have one more element
+        pthread_cond_signal(&b->more);
+        
+        //unlock the mutex
+        pthread_mutex_unlock(&b->mutex);
+    }
+
+    //reading here is done! Now set done to 1 to signify that the 
+    //mapper's loading process has finished
+    pthread_mutex_lock(&b->mutex);
+    b->done = 1;
+    pthread_mutex_unlock(&b->mutex);
+    
+
+    pthread_exit(0);  //thread done byebye
+}
+
+void* reducerRunner(void* a){
+
+    struct reducerPassingData *data = a;
+    int files = data->files;
+
+    printf("reducer thread started boi, has %d many buffers\n", files);
+    LinkedBuffer** buffers = data->buffers;
+    int* done = initEmptyArr(files);
+    int countDone = 0;
+    while(countDone < files){ // for each buffer
+        for(int i = 0; i < files; i++){ 
+            //if this buffer is done, skip it
+            if (done[i])
+                continue; 
+            
+            
+            //lock it
+            LinkedBuffer* b = buffers[i];
+            //lock the mutex
+            pthread_mutex_lock(&b->mutex);
+            
+            //if it is empty, mark it as empty and skip in the future
+            if (b->done && isEmpty(b)){
+                done[i] = 1;
+                countDone++;
+            } else { //buffer is not done! 
+                //while it is empty, wait until there is a new item
+                while (isEmpty(b)){
+                    pthread_cond_wait(&b->more, &b->mutex);
+                }
+
+                //now we have a new element in the buffer, mutex is unlocked
+                char* data = popData(b);
+
+                //now signal that there is less # of elements in buffer
+                pthread_cond_signal(&b->less);
+
+                //now unlock the mutex
+                pthread_mutex_unlock(&b->mutex);
+
+                //TODO process the data
+                //printf("Reducer read: %s\n", data);
+
+                //get the data out
+                int row, val;
+                sscanf(data, "%d %d", &row, &val);
+                result[row-1] = result[row-1] + val;
+            }
+            
+        }
+    }
+    
+
+    free(done);
+    pthread_exit(0);
+}
+
+void saveResult(char* name){
+    //printf("file name issss: %s\n", buf);
+    //printarr(result, size);
+    FILE *fp = fopen(name, "w");
+    char buf[255];
+    for(int i = 0; i < size; i++){
+        snprintf(buf, 255, "%d %d\n", i + 1, result[i]);
+        fputs(buf, fp);
+    }
+
+    fclose(fp);
+}
