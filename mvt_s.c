@@ -22,13 +22,11 @@ int * vector;
 int size;
 typedef struct mapperPassingData{
           int index;
-          pthread_mutex_t lock;
           LinkedBuffer* b;
 } mapperPassingData;
 
 typedef struct reducerPassingData{
   int files;
-  pthread_mutex_t* mutexes;
   LinkedBuffer** buffers;
 } reducerPassingData;
 
@@ -37,7 +35,7 @@ void * mapperRunner (void *  a)
   
   struct mapperPassingData *data = a;
   int* index = data->index;
-  pthread_mutex_t lock = data->lock;
+  LinkedBuffer* b = data->b;
   //printf ("thread started: %d\n",index); 
 
   //open the indexth split file
@@ -58,27 +56,82 @@ void * mapperRunner (void *  a)
 
         snprintf(buf, 255, "%d %d", row, res);
         //TODO write buf to b after syncronizing it
+
+        //crit section
+        pthread_mutex_lock(&b->mutex);
+        
+        //while buffer is full, wait
+        while (isFull(b)){
+            pthread_cond_wait(&b->less, &b->mutex);
+        }
+
+        //mutex unlocked and there is space in the buffer
+        addData(b, buf);
+
+        //signal that we have one more element
+        pthread_cond_signal(&b->more);
+        
+        //unlock the mutex
+        pthread_mutex_unlock(&b->mutex);
     }
 
-  pthread_exit(NULL); 
+    //reading here is done! Now set done to 1 to signify that the 
+    //mapper's loading process has finished
+    pthread_mutex_lock(&b->mutex);
+    b->done = 1;
+    pthread_mutex_lock(&b->mutex);
+    
+
+    pthread_exit(0);  //thread done byebye
 }
 
 void* reducerRunner(void* a){
-  //printf("reducer thread started boi\n");
+    printf("reducer thread started boi\n");
 
-  struct reducerPassingData *data = a;
-  int n = data->count;
-  int files = data->files;
-  int** partials = data->partialResults;
-  int* res = data->result;
+    struct reducerPassingData *data = a;
+    int files = data->files;
+    LinkedBuffer** buffers = data->buffers;
+    int* done = initEmptyArr(files);
+    int countDone = 0;
+    while(countDone < files){ // for each buffer
+        for(int i = 0; i < files; i++){ 
+            //if this buffer is done, skip it
+            if (done[i])
+                continue; 
+            //lock it
+            LinkedBuffer* b = buffers[i];
+            //lock the mutex
+            pthread_mutex_lock(&b->mutex);
+            
+            //if it is empty, mark it as empty and skip in the future
+            if (b->done && isEmpty(b)){
+                done[i] = 1;
+            } else { //buffer is not done! 
+                //while it is empty, wait until there is a new item
+                while (isEmpty(b)){
+                    pthread_cond_wait(&b->more, &b->mutex);
+                }
 
-  for(int i = 0; i < files; i++){
-    for(int j = 0; j < n; j++){
-      res[j] += partials[i][j];
+                //now we have a new element in the buffer, mutex is unlocked
+                char* data = popData(b);
+
+                //now signal that there is less # of elements in buffer
+                pthread_cond_signal(&b->less);
+
+                //now unlock the mutex
+                pthread_mutex_unlock(&b->mutex);
+
+                //TODO process the data
+                printf("Reducer read: %s", data);
+
+            }
+            
+        }
     }
-  }
+    
 
-  pthread_exit(0);
+    free(done);
+    pthread_exit(0);
 }
 
 int microsec(const struct timeval *start, const struct timeval *end) {
@@ -212,10 +265,8 @@ void createAndProcessSplits(int files, char* result, int maxBuffer) {
     pid_t n;
     int vectorRow = size;
 
-    // MUTEXES
-    pthread_mutex_t* mutexes = malloc(sizeof(pthread_mutex_t)* files);
-
     // BUFFERS
+    // THEY ALREADY HAVE THEIR OWN MUTEXES INSIDE, JUST INITIALZIE THEM.
     LinkedBuffer** buffers = malloc(sizeof(LinkedBuffer * )* files);
 
     //printf("i need this many veccies.. %d\n", vectorRow);
@@ -224,7 +275,6 @@ void createAndProcessSplits(int files, char* result, int maxBuffer) {
 
     for(int i = 0; i < files; i++){
         data[i].index = i;
-        data[i].lock = mutexes[i];
         buffers[i] = createBuffer(maxBuffer);
         data[i].b = buffers[i];
         pthread_attr_init(&attr);
@@ -233,7 +283,6 @@ void createAndProcessSplits(int files, char* result, int maxBuffer) {
 
     reducerPassingData d;
     d.files = files;
-    d.mutexes = mutexes;
     d.buffers = buffers;
     pthread_attr_init(&attr);
     pthread_create(&reducer, &attr, reducerRunner, &d);

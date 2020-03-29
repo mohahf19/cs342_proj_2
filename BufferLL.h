@@ -1,5 +1,6 @@
 // #ifndef BUFFER_H
 // #define BUFFER_H
+#include <pthread.h>
 
 typedef struct Node {
     struct Node* next;
@@ -13,6 +14,9 @@ typedef struct LinkedBuffer{
     int size;
     int max;
     int done;
+    pthread_mutex_t mutex;
+    pthread_cond_t more;
+    pthread_cond_t less;
 } LinkedBuffer;
 
 LinkedBuffer* createBuffer(int max);

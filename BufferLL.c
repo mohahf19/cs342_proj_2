@@ -10,6 +10,10 @@ LinkedBuffer* createBuffer(int max){
     b->size = 0;
     b->max = max;
     b->done = 0;
+    pthread_mutex_init(&b->mutex, NULL);
+    pthread_cond_init(&b->more, NULL);
+    pthread_cond_init(&b->less, NULL);
+
 }
 
 Node* createNode(char* data){
