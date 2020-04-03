@@ -10,9 +10,15 @@ LinkedBuffer* createBuffer(int max){
     b->size = 0;
     b->max = max;
     b->done = 0;
-    pthread_mutex_init(&b->mutex, NULL);
-    pthread_cond_init(&b->more, NULL);
-    pthread_cond_init(&b->less, NULL);
+    
+    // pthread_mutex_init(&b->mutex, NULL);
+    // pthread_cond_init(&b->more, NULL);
+    // pthread_cond_init(&b->less, NULL);
+
+    sem_init(&b->occupied, 0, 0);
+    sem_init(&b->empty, 0, b->max);
+    sem_init(&b->pmut, 0, 1);
+    sem_init(&b->cmut, 0, 1);
 
     return b;
 }

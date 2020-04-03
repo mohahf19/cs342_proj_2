@@ -1,6 +1,6 @@
-// #ifndef BUFFER_H
-// #define BUFFER_H
-#include <pthread.h>
+#ifndef BUFFER_H
+#define BUFFER_H
+#include <semaphore.h>
 
 typedef struct Node {
     struct Node* next;
@@ -14,9 +14,13 @@ typedef struct LinkedBuffer{
     int size;
     int max;
     int done;
-    pthread_mutex_t mutex;
-    pthread_cond_t more;
-    pthread_cond_t less;
+    // pthread_mutex_t mutex;
+    // pthread_cond_t more;
+    // pthread_cond_t less;
+    sem_t pmut;
+    sem_t cmut;
+    sem_t occupied;
+    sem_t empty;
 } LinkedBuffer;
 
 LinkedBuffer* createBuffer(int max);
@@ -35,4 +39,4 @@ void revPrintLinkedBuffer(LinkedBuffer* b);
 
 char* popData(LinkedBuffer*);
 
-// #endif 
+#endif 
