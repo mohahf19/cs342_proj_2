@@ -184,7 +184,7 @@ void createAndProcessSplits(int files, char* result, int maxBuffer) {
 
 
     for(int i = 0; i < files; i++){
-        printf("created mapper %d\n", i);
+        //printf("created mapper %d\n", i);
         data[i].index = i;
         buffers[i] = createBuffer(maxBuffer);
         data[i].b = buffers[i];
@@ -417,7 +417,7 @@ void * mapperRunner (void *  a)
   int index = data->index;
   LinkedBuffer* b = data->b;
   
-  printf ("mapper started: %d\n",index); 
+  //printf ("mapper started: %d\n",index); 
 
   //open the indexth split file
   char buf[255];
@@ -437,40 +437,32 @@ void * mapperRunner (void *  a)
         int res = (val * vector[col-1]); //to row
         
         snprintf(buf, 255, "%d %d", row, res);
-        //TODO write buf to b after syncronizing it
 
         //crit section
-        //pthread_mutex_lock(&b->mutex);
-        //printf("mutex %d locked\n", index);
+
+        //wait until there is space
         sem_wait(&b->empty);
-        sem_wait(&b->pmut);
-        //printf("mutex %d locked\n", index);
+
+        //wait until mutex is available
+        sem_wait(&b->mutex);
         
 
-        //while buffer is full, wait
-        // while (isFull(b)){
-        //     //pthread_cond_wait(&b->less, &b->mutex);
-        //     sem_post(&b->mutex);
-        //     sem_wait(&b->less);
-        // }
-
-        //mutex unlocked and there is space in the buffer
+        //mutex locked and there is space in the buffer
         addData(b, buf);
+
         //signal that we have one more element
-        //pthread_cond_signal(&b->more);
         sem_post(&b->occupied);
+
         //unlock the mutex
-        //pthread_mutex_unlock(&b->mutex);
-        sem_post(&b->pmut);
+        sem_post(&b->mutex);
     }
 
     //reading here is done! Now set done to 1 to signify that the 
     //mapper's loading process has finished
-    //pthread_mutex_lock(&b->mutex);
-    sem_wait(&b->pmut);
+    sem_wait(&b->mutex);
+    sem_post(&b->occupied);
     b->done = 1;
-    //pthread_mutex_unlock(&b->mutex);
-    sem_post(&b->pmut);
+    sem_post(&b->mutex);
     
 
     pthread_exit(0);  //thread done byebye
@@ -481,7 +473,6 @@ void* reducerRunner(void* a){
     struct reducerPassingData *data = a;
     int files = data->files;
 
-    printf("reducer thread started boi, has %d many buffers\n", files);
     LinkedBuffer** buffers = data->buffers;
     int* done = initEmptyArr(files);
     int countDone = 0;
@@ -491,17 +482,17 @@ void* reducerRunner(void* a){
             if (done[i])
                 continue; 
             
-            //lock it
             LinkedBuffer* b = buffers[i];
+
             //lock the mutex
-            //pthread_mutex_lock(&b->mutex);
-            //printf("waiting on mutex for %d\n", i);
-            sem_wait(&b->pmut);
+            sem_wait(&b->occupied);
+            sem_wait(&b->mutex);
+            //printf("mutex %d has %d left \n", i, b->size);
             //if it is empty, mark it as empty and skip in the future
             if (b->done && isEmpty(b)){
                 done[i] = 1;
                 countDone++;
-                sem_post(&b->pmut);
+                sem_post(&b->mutex); 
             } else { //buffer is not done! 
                 //while it is empty, wait until there is a new item
                 
@@ -509,10 +500,12 @@ void* reducerRunner(void* a){
                 //     //pthread_cond_wait(&b->more, &b->mutex);
                 //     sem_wait(&b->more);
                 // }
-                sem_wait(&b->occupied);
+                // sem_post(&b->mutex);
+                
+                // sem_wait(&b->mutex);
 
-                printf("buffer %d has %d to eat\n", i, b->size);
-                //do this until nothing is left in the buffer
+                //printf("buffer %d has %d to eat\n", i, b->size);
+                //do this until nothing is left inl the buffer
                 while(!isEmpty(b)){
                     
                     //now we have a new element in the buffer, mutex is locked
@@ -525,9 +518,12 @@ void* reducerRunner(void* a){
                     int row, val;
                     sscanf(data, "%d %d", &row, &val);
                     result[row-1] = result[row-1] + val;
+                    
                     sem_post(&b->empty);
-                    printf("buffer %d has %d left\n", i, b->size);
+                    //printf("buffer %d has %d left, empty: %d\n", i, b->size, !isEmpty(b));
                 }
+
+                
 
                 //now buffer should have some space
                 //now signal that there is less # of elements in buffer
@@ -536,7 +532,7 @@ void* reducerRunner(void* a){
 
                 //now unlock the mutex
                 //pthread_mutex_unlock(&b->mutex);
-                sem_post(&b->pmut);                
+                sem_post(&b->mutex);                
             }
             
         }

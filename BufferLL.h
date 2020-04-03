@@ -17,8 +17,8 @@ typedef struct LinkedBuffer{
     // pthread_mutex_t mutex;
     // pthread_cond_t more;
     // pthread_cond_t less;
-    sem_t pmut;
-    sem_t cmut;
+    sem_t mutex;
+    //sem_t cmut;
     sem_t occupied;
     sem_t empty;
 } LinkedBuffer;
